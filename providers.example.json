@@ -1,0 +1,26 @@
+{
+  "profile_name": "agentic",
+  "providers": {
+    "primary": {
+      "label": "Codex GPT-5.5",
+      "model": "openai/gpt-5.5"
+    },
+    "secondary": {
+      "label": "DeepSeek V4 Flash",
+      "model": "opencode/deepseek-v4-flash-free"
+    },
+    "alternate": {
+      "label": "GLM-5.2",
+      "model": "zai-coding-plan/glm-5.2"
+    }
+  },
+  "agents": {
+    "primary": ["lead", "security", "reviewer", "debugger"],
+    "secondary": ["coder", "researcher", "tester", "docs"]
+  },
+  "fallbacks": {
+    "openai/gpt-5.5": ["zai-coding-plan/glm-5.2"],
+    "opencode/deepseek-v4-flash-free": ["zai-coding-plan/glm-5.2", "openai/gpt-5.5"],
+    "zai-coding-plan/glm-5.2": ["openai/gpt-5.5"]
+  }
+}

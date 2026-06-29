@@ -1,0 +1,6 @@
+# Runtime dependencies: none.
+# This project uses the Python standard library plus Tkinter from CPython.
+#
+# Optional tooling is declared in pyproject.toml:
+#   py -3 -m pip install -e .[dev]
+#   py -3 -m pip install -e .[build]
