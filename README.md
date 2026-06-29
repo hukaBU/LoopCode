@@ -5,6 +5,10 @@ projects. It helps you register projects, connect opencode, choose one AI model
 for all agents, rewrite the project's `.opencode` model config, and launch the
 project's PowerShell loop driver.
 
+The goal of the project is to make coding automation easier to operate: prepare
+clear objectives, choose an AI model, authenticate opencode, and launch repeatable
+coding loops from one small desktop app.
+
 The app is intentionally local-first:
 
 - runtime dependencies: Python standard library + Tkinter
@@ -21,6 +25,28 @@ hosted backend.
 
 Loop launching is currently Windows-only because it uses PowerShell and opens
 each loop in its own console.
+
+LoopCode currently works exclusively with `opencode` and `opencode-multi`.
+Support for other loop runners can be added later, but the current driver,
+auth, model switching, and launch flow all assume opencode.
+
+## Use With AI Coding Tools
+
+LoopCode is designed to be used alongside an AI coding assistant or coding tool,
+for example Codex, Claude Code, opencode itself, or another assistant that can
+help you plan, review, and refine coding work.
+
+The recommended workflow is:
+
+1. Use an AI assistant to turn a rough project idea into clear OBJ tasks.
+2. Put those objectives into your project loop driver or project state.
+3. Use LoopCode to select the project, authenticate its opencode profile, choose
+   the model, and launch the loop.
+4. Use your AI coding assistant again to review outputs, tighten objectives, or
+   debug failed loop cycles.
+
+LoopCode is not a replacement for the coding model. It is the local control
+surface that makes opencode-based coding loops easier to run repeatedly.
 
 ## How It Works
 
@@ -196,11 +222,14 @@ opencode providers list
 opencode-multi run <profile> providers list
 ```
 
-## OBJ Prompt
+## Prompts
 
-Click `OBJ prompt` to copy a reusable prompt that asks an AI to translate a
-rough project brief into small, testable OBJ tasks for the loop. The prompt is
-also available in [docs/obj-prompt.md](docs/obj-prompt.md).
+Click `OBJ prompt` in the app to copy a reusable prompt that asks an AI to
+translate a rough project brief into small, testable OBJ tasks for the loop.
+
+More reusable prompts are available in [docs/prompts.md](docs/prompts.md),
+including prompts for creating OBJ plans, checking loop readiness, drafting a
+driver contract, debugging failed cycles, and auditing privacy before publishing.
 
 ## Example Driver
 
