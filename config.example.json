@@ -2,7 +2,8 @@
   "projects": [
     {
       "name": "Example driver project",
-      "path": "C:\\path\\to\\LoopCode\\examples\\driver-project"
+      "path": "C:\\path\\to\\LoopCode\\examples\\driver-project",
+      "profile": "agentic"
     }
   ]
 }

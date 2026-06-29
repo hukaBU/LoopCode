@@ -15,6 +15,7 @@ dist/
 
 config.json
 providers.json
+secrets.json
 
 tmp/
 output/

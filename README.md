@@ -9,6 +9,7 @@ The app is intentionally local-first:
 - runtime dependencies: Python standard library + Tkinter
 - private project list: `config.json` (git-ignored)
 - private provider overrides: `providers.json` (git-ignored)
+- optional API-key fallback: `secrets.json` (git-ignored)
 - public templates: `config.example.json` and `providers.example.json`
 
 ## Status
@@ -49,6 +50,10 @@ Loop launching is currently Windows-only because it uses PowerShell and
 
    Or double-click `LoopCode.bat`.
 
+5. Select a project and click `Setup opencode auth`. LoopCode creates the
+   `opencode-multi` profile when needed, then opens `opencode providers login`
+   through that profile.
+
 ## Project Config
 
 `config.json` is local and ignored by git:
@@ -84,6 +89,39 @@ The default provider modes are:
 
 Each mode rewrites existing `model` fields in `.opencode/opencode.json` and
 `model:` frontmatter lines in `.opencode/agents/*.md`.
+
+Use `Settings` to choose the active model from each provider slot's dropdown.
+The model lists are stored in private `providers.json`.
+
+## opencode Auth
+
+LoopCode expects credentials to live in opencode whenever possible. For each
+project, the app uses this profile order:
+
+- `$profileName = "..."` in the project's `auto-*.ps1`
+- optional `profile` in `config.json`
+- `profile_name` from `providers.json`
+
+`Setup opencode auth` creates the profile with `opencode-multi create <profile>
+--init` if it does not exist, then opens:
+
+```powershell
+opencode-multi run <profile> providers login
+```
+
+`Auth status` runs:
+
+```powershell
+opencode-multi run <profile> providers list
+```
+
+`secrets.json` is only a fallback for workflows that still need environment
+variables injected into the launched driver process.
+
+## OBJ Prompt
+
+Click `OBJ prompt` to copy a reusable prompt that asks an AI to translate a
+rough project brief into small, testable OBJ tasks for the loop.
 
 ## Example Driver
 

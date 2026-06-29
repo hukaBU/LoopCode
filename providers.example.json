@@ -3,15 +3,21 @@
   "providers": {
     "primary": {
       "label": "Codex GPT-5.5",
-      "model": "openai/gpt-5.5"
+      "model": "openai/gpt-5.5",
+      "models": ["openai/gpt-5.5"],
+      "api_key_env": "OPENAI_API_KEY"
     },
     "secondary": {
       "label": "DeepSeek V4 Flash",
-      "model": "opencode/deepseek-v4-flash-free"
+      "model": "opencode/deepseek-v4-flash-free",
+      "models": ["opencode/deepseek-v4-flash-free"],
+      "api_key_env": "DEEPSEEK_API_KEY"
     },
     "alternate": {
       "label": "GLM-5.2",
-      "model": "zai-coding-plan/glm-5.2"
+      "model": "zai-coding-plan/glm-5.2",
+      "models": ["zai-coding-plan/glm-5.2"],
+      "api_key_env": "ZAI_API_KEY"
     }
   },
   "agents": {

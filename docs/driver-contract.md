@@ -41,6 +41,10 @@ $profileName = "agentic"
 The launcher reads that value from `auto-*.ps1` files so provider availability
 checks use the same `opencode-multi` profile as the loop.
 
+If the driver does not define `$profileName`, LoopCode uses the optional
+`profile` field in `config.json`, then the default `profile_name` from
+`providers.json`.
+
 ## opencode Files
 
 The provider switch updates existing `model` fields in:
@@ -53,7 +57,7 @@ definitions or create prompts.
 
 ## opencode-multi
 
-`opencode-multi` must be available on `PATH`. The launcher checks model
+`opencode-multi` and `opencode` must be available on `PATH`. The launcher checks model
 availability with:
 
 ```powershell
@@ -62,6 +66,15 @@ opencode-multi run <profile> models <provider>
 
 If a requested model is unavailable, configured fallbacks from `providers.json`
 are tried.
+
+For auth, LoopCode opens:
+
+```powershell
+opencode-multi run <profile> providers login
+```
+
+That command delegates credentials to opencode. Local API keys in `secrets.json`
+are only an optional fallback.
 
 ## .ai State
 
