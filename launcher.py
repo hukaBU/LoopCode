@@ -1,20 +1,14 @@
 """LoopCode - desktop helper for opencode-multi projects.
 
-The app keeps a local list of projects, launches each project's PowerShell
-driver in a new console, and rewrites configured agent model ids when switching
-provider modes.
-
-Driver contract:
-  - each project has an auto-sentinel.ps1 driver at its root,
-  - each project has .opencode/opencode.json and .opencode/agents/*.md,
-  - opencode-multi is installed and authenticated for the selected providers.
+LoopCode keeps a local list of projects, launches each project's PowerShell
+driver, helps authenticate opencode profiles, and switches all configured
+agents to one selected model.
 """
 
 from __future__ import annotations
 
 import copy
 import json
-import os
 import re
 import subprocess
 import tkinter as tk
@@ -25,40 +19,81 @@ APP_DIR = Path(__file__).resolve().parent
 CONFIG_FILE = APP_DIR / "config.json"
 PROVIDERS_FILE = APP_DIR / "providers.json"
 PROVIDERS_EXAMPLE_FILE = APP_DIR / "providers.example.json"
-SECRETS_FILE = APP_DIR / "secrets.json"
+
+DEFAULT_AGENTS = [
+    "lead",
+    "security",
+    "reviewer",
+    "debugger",
+    "coder",
+    "researcher",
+    "tester",
+    "docs",
+]
+
+POPULAR_MODELS = [
+    "openai/gpt-5.5",
+    "openai/gpt-5.5-fast",
+    "openai/gpt-5.4",
+    "openai/gpt-5.4-fast",
+    "openai/gpt-5.4-mini",
+    "openai/gpt-5.2-pro",
+    "openai/gpt-5",
+    "openai/gpt-5-pro",
+    "openai/gpt-4o",
+    "openai/o3",
+    "openai/o4-mini",
+    "anthropic/claude-opus-4-5",
+    "anthropic/claude-sonnet-4-5",
+    "anthropic/claude-haiku-4-5-20251001",
+    "anthropic/claude-opus-4-1",
+    "anthropic/claude-3-5-sonnet-20241022",
+    "deepseek/deepseek-v4-flash",
+    "deepseek/deepseek-v4-pro",
+    "deepseek/deepseek-reasoner",
+    "deepseek/deepseek-chat",
+    "alibaba/qwen3-coder-plus",
+    "alibaba/qwen-plus",
+    "alibaba/qwen3-max",
+    "alibaba/qwen3.7-plus",
+    "alibaba-coding-plan/qwen3-coder-plus",
+    "alibaba-coding-plan/qwen3.7-max",
+    "zai/glm-5.2",
+    "zai/glm-5.1",
+    "zai/glm-4.7",
+    "zai/glm-5-turbo",
+    "zai-coding-plan/glm-5.2",
+    "zai-coding-plan/glm-5.1",
+    "google/gemini-2.5-pro",
+    "google/gemini-2.5-flash",
+    "google/gemini-2.0-flash",
+    "google/gemini-3.5-flash",
+    "google-vertex/gemini-2.5-pro",
+    "google-vertex/gemini-2.5-flash",
+    "xai/grok-4.3",
+    "xai/grok-4.20-0309-reasoning",
+    "xai/grok-4.20-0309-non-reasoning",
+    "xai/grok-build-0.1",
+    "minimax/MiniMax-M2.5",
+    "minimax/MiniMax-M3",
+    "minimax-coding-plan/MiniMax-M2.5",
+    "xiaomi/mimo-v2.5-pro",
+    "xiaomi/mimo-v2.5",
+    "xiaomi/mimo-v2-flash",
+    "moonshotai/kimi-k2.7-code",
+    "moonshotai/kimi-k2-thinking-turbo",
+    "moonshotai/kimi-k2.5",
+    "mistral/mistral-large-latest",
+    "mistral/codestral-latest",
+]
 
 DEFAULT_CONFIG = {"projects": []}
-
 DEFAULT_PROVIDER_CONFIG = {
     "profile_name": "agentic",
-    "providers": {
-        "primary": {
-            "label": "Primary model",
-            "model": "provider/primary-model",
-            "models": ["provider/primary-model"],
-            "api_key_env": "PRIMARY_API_KEY",
-        },
-        "secondary": {
-            "label": "Secondary model",
-            "model": "provider/secondary-model",
-            "models": ["provider/secondary-model"],
-            "api_key_env": "SECONDARY_API_KEY",
-        },
-        "alternate": {
-            "label": "Alternate model",
-            "model": "provider/alternate-model",
-            "models": ["provider/alternate-model"],
-            "api_key_env": "ALTERNATE_API_KEY",
-        },
-    },
-    "agents": {
-        "primary": ["lead", "security", "reviewer", "debugger"],
-        "secondary": ["coder", "researcher", "tester", "docs"],
-    },
-    "fallbacks": {},
+    "model": "openai/gpt-5.5",
+    "models": POPULAR_MODELS,
+    "agents": {"all": DEFAULT_AGENTS},
 }
-DEFAULT_SECRET_CONFIG = {"api_keys": {}}
-PROVIDER_KEYS = ("primary", "secondary", "alternate")
 
 # --- Theme -------------------------------------------------------------------
 BG = "#0f1117"
@@ -66,11 +101,7 @@ PANEL = "#171a21"
 FG = "#e6e8eb"
 MUTED = "#8b93a1"
 CYAN = "#22d3ee"
-GREEN = "#16a34a"
-BLUE = "#2563eb"
-PURPLE = "#7c3aed"
 RED = "#b91c1c"
-ORANGE = "#ea580c"
 
 
 def _deepcopy_json(data: dict) -> dict:
@@ -91,13 +122,6 @@ def _clean_string(value: object, fallback: str) -> str:
     return fallback
 
 
-def _clean_string_list(value: object, fallback: list[str]) -> list[str]:
-    if not isinstance(value, list):
-        return list(fallback)
-    cleaned = [item.strip() for item in value if isinstance(item, str) and item.strip()]
-    return cleaned or list(fallback)
-
-
 def _dedupe_strings(values: list[str]) -> list[str]:
     out: list[str] = []
     seen: set[str] = set()
@@ -109,43 +133,75 @@ def _dedupe_strings(values: list[str]) -> list[str]:
     return out
 
 
-def _clean_provider(value: object, fallback: dict) -> dict:
-    provider = value if isinstance(value, dict) else {}
-    model = _clean_string(provider.get("model"), fallback["model"])
-    models = _clean_string_list(provider.get("models"), fallback.get("models", [model]))
-    models = _dedupe_strings([model, *models])
-    return {
-        "label": _clean_string(provider.get("label"), fallback["label"]),
-        "model": model,
-        "models": models,
-        "api_key_env": _clean_string(provider.get("api_key_env"), fallback["api_key_env"]),
-    }
+def _clean_string_list(value: object, fallback: list[str]) -> list[str]:
+    if not isinstance(value, list):
+        return list(fallback)
+    cleaned = [item.strip() for item in value if isinstance(item, str) and item.strip()]
+    return cleaned or list(fallback)
+
+
+def _agents_from_raw(raw_agents: object) -> list[str]:
+    if not isinstance(raw_agents, dict):
+        return list(DEFAULT_AGENTS)
+    if isinstance(raw_agents.get("all"), list):
+        return _clean_string_list(raw_agents.get("all"), DEFAULT_AGENTS)
+    primary = _clean_string_list(raw_agents.get("primary"), [])
+    secondary = _clean_string_list(raw_agents.get("secondary"), [])
+    return _dedupe_strings([*primary, *secondary]) or list(DEFAULT_AGENTS)
+
+
+def _models_from_legacy_providers(providers: object) -> list[str]:
+    if not isinstance(providers, dict):
+        return []
+    models: list[str] = []
+    for provider in providers.values():
+        if not isinstance(provider, dict):
+            continue
+        model = provider.get("model")
+        if isinstance(model, str):
+            models.append(model)
+        provider_models = provider.get("models")
+        if isinstance(provider_models, list):
+            models.extend(item for item in provider_models if isinstance(item, str))
+    return models
+
+
+def load_provider_config_from_data(data: dict) -> dict:
+    cfg = copy.deepcopy(DEFAULT_PROVIDER_CONFIG)
+    raw = data if isinstance(data, dict) else {}
+
+    legacy_models = _models_from_legacy_providers(raw.get("providers"))
+    raw_models = raw.get("models")
+    models = _clean_string_list(raw_models, POPULAR_MODELS)
+    models = _dedupe_strings([*legacy_models, *models])
+
+    default_model = _clean_string(raw.get("model"), models[0])
+    if default_model not in models:
+        models.insert(0, default_model)
+
+    cfg["profile_name"] = _clean_string(raw.get("profile_name"), cfg["profile_name"])
+    cfg["model"] = default_model
+    cfg["models"] = models
+    cfg["agents"] = {"all": _agents_from_raw(raw.get("agents"))}
+    return cfg
 
 
 def load_provider_config(
     config_path: Path | None = None,
     example_path: Path | None = None,
 ) -> dict:
-    """Load provider settings from providers.json, then providers.example.json.
+    """Load local model settings from providers.json, then providers.example.json."""
 
-    providers.json is intentionally git-ignored. providers.example.json gives a
-    public template and a runnable default for people using the same providers.
-    """
-
-    cfg = copy.deepcopy(DEFAULT_PROVIDER_CONFIG)
     paths = (
         config_path or PROVIDERS_FILE,
         example_path or PROVIDERS_EXAMPLE_FILE,
     )
-    raw: dict | None = None
     for path in paths:
         if path.exists():
             raw = _read_json_file(path)
             if raw is not None:
-                break
-    if raw is None:
-        return cfg
-    return load_provider_config_from_data(raw)
+                return load_provider_config_from_data(raw)
+    return copy.deepcopy(DEFAULT_PROVIDER_CONFIG)
 
 
 def save_provider_config(config: dict, path: Path | None = None) -> None:
@@ -154,136 +210,26 @@ def save_provider_config(config: dict, path: Path | None = None) -> None:
     target.write_text(json.dumps(cleaned, indent=2) + "\n", encoding="utf-8")
 
 
-def load_provider_config_from_data(data: dict) -> dict:
-    cfg = copy.deepcopy(DEFAULT_PROVIDER_CONFIG)
-    raw = data if isinstance(data, dict) else {}
-
-    cfg["profile_name"] = _clean_string(raw.get("profile_name"), cfg["profile_name"])
-
-    providers = raw.get("providers")
-    if isinstance(providers, dict):
-        for key in PROVIDER_KEYS:
-            cfg["providers"][key] = _clean_provider(
-                providers.get(key),
-                cfg["providers"][key],
-            )
-
-    agents = raw.get("agents")
-    if isinstance(agents, dict):
-        cfg["agents"]["primary"] = _clean_string_list(
-            agents.get("primary"),
-            cfg["agents"]["primary"],
-        )
-        cfg["agents"]["secondary"] = _clean_string_list(
-            agents.get("secondary"),
-            cfg["agents"]["secondary"],
-        )
-
-    fallbacks = raw.get("fallbacks")
-    if isinstance(fallbacks, dict):
-        cleaned: dict[str, list[str]] = {}
-        for model, candidates in fallbacks.items():
-            if not isinstance(model, str) or not model.strip():
-                continue
-            values = [candidates] if isinstance(candidates, str) else candidates
-            cleaned[model.strip()] = _clean_string_list(values, [])
-        cfg["fallbacks"] = cleaned
-
-    return cfg
-
-
-def load_secret_config(path: Path | None = None) -> dict:
-    raw = _read_json_file(path or SECRETS_FILE) or DEFAULT_SECRET_CONFIG
-    api_keys = raw.get("api_keys") if isinstance(raw, dict) else {}
-    cleaned: dict[str, str] = {}
-    if isinstance(api_keys, dict):
-        for key, value in api_keys.items():
-            if isinstance(key, str) and isinstance(value, str) and key.strip() and value:
-                cleaned[key.strip()] = value
-    return {"api_keys": cleaned}
-
-
-def save_secret_config(config: dict, path: Path | None = None) -> None:
-    target = path or SECRETS_FILE
-    cleaned = load_secret_config_from_data(config)
-    target.write_text(json.dumps(cleaned, indent=2) + "\n", encoding="utf-8")
-
-
-def load_secret_config_from_data(data: dict) -> dict:
-    api_keys = data.get("api_keys") if isinstance(data, dict) else {}
-    cleaned: dict[str, str] = {}
-    if isinstance(api_keys, dict):
-        for key, value in api_keys.items():
-            if isinstance(key, str) and isinstance(value, str) and key.strip() and value:
-                cleaned[key.strip()] = value
-    return {"api_keys": cleaned}
-
-
-def runtime_env(base_env: dict[str, str] | None = None) -> dict[str, str]:
-    env = dict(base_env or os.environ)
-    for key, value in load_secret_config()["api_keys"].items():
-        env[key] = value
-    return env
-
-
 def configure_runtime(config: dict | None = None) -> None:
-    global PROVIDER_CONFIG
-    global PROFILE_NAME, PROVIDERS, PRIMARY_MODEL, SECONDARY_MODEL, ALTERNATE_MODEL
-    global PRIMARY_AGENTS, SECONDARY_AGENTS, ALL_AGENTS, MODEL_FALLBACKS
+    global PROVIDER_CONFIG, PROFILE_NAME, DEFAULT_MODEL, MODEL_CATALOG, ALL_AGENTS
 
     PROVIDER_CONFIG = load_provider_config_from_data(config or load_provider_config())
     PROFILE_NAME = PROVIDER_CONFIG["profile_name"]
-    PROVIDERS = PROVIDER_CONFIG["providers"]
-    PRIMARY_MODEL = PROVIDERS["primary"]["model"]
-    SECONDARY_MODEL = PROVIDERS["secondary"]["model"]
-    ALTERNATE_MODEL = PROVIDERS["alternate"]["model"]
-    PRIMARY_AGENTS = tuple(PROVIDER_CONFIG["agents"]["primary"])
-    SECONDARY_AGENTS = tuple(PROVIDER_CONFIG["agents"]["secondary"])
-    ALL_AGENTS = tuple(dict.fromkeys((*PRIMARY_AGENTS, *SECONDARY_AGENTS)))
-    MODEL_FALLBACKS = {
-        model: tuple(candidates)
-        for model, candidates in PROVIDER_CONFIG.get("fallbacks", {}).items()
-    }
+    DEFAULT_MODEL = PROVIDER_CONFIG["model"]
+    MODEL_CATALOG = tuple(PROVIDER_CONFIG["models"])
+    ALL_AGENTS = tuple(PROVIDER_CONFIG["agents"]["all"])
 
 
 def reload_runtime_config() -> None:
-    PROVIDER_CACHE.clear()
     configure_runtime(load_provider_config())
 
 
 PROVIDER_CONFIG: dict = {}
 PROFILE_NAME = ""
-PROVIDERS: dict = {}
-PRIMARY_MODEL = ""
-SECONDARY_MODEL = ""
-ALTERNATE_MODEL = ""
-PRIMARY_AGENTS: tuple[str, ...] = ()
-SECONDARY_AGENTS: tuple[str, ...] = ()
+DEFAULT_MODEL = ""
+MODEL_CATALOG: tuple[str, ...] = ()
 ALL_AGENTS: tuple[str, ...] = ()
-MODEL_FALLBACKS: dict[str, tuple[str, ...]] = {}
-PROVIDER_CACHE: dict[str, bool] = {}
 configure_runtime()
-
-
-def provider_label(key: str) -> str:
-    provider = PROVIDERS.get(key, {})
-    label = provider.get("label") if isinstance(provider, dict) else None
-    return str(label or key)
-
-
-def mode_label(mode: str) -> str:
-    primary = provider_label("primary")
-    secondary = provider_label("secondary")
-    alternate = provider_label("alternate")
-    labels = {
-        "mixed": f"{primary} + {secondary}",
-        "primary_only": f"{primary} only",
-        "secondary": f"{secondary} only",
-        "alternate": f"{alternate} only",
-        "primary_alternate": f"{primary} + {alternate}",
-        "unknown": "unknown",
-    }
-    return labels.get(mode, labels["unknown"])
 
 
 # =========================================================================
@@ -326,51 +272,15 @@ def _agent_model(opencode_dir: Path, agent: str) -> str:
     return ""
 
 
-def _provider_key(model: str) -> str:
-    return model.split("/", 1)[0] if "/" in model else ""
-
-
-def _slugify_profile_name(value: str) -> str:
-    slug = re.sub(r"[^a-zA-Z0-9_-]+", "-", value.strip().lower()).strip("-")
-    return slug or PROFILE_NAME
-
-
 def _windows_console_flags() -> int:
     if not hasattr(subprocess, "CREATE_NEW_CONSOLE"):
         raise OSError("Interactive opencode commands are currently Windows-only.")
     return subprocess.CREATE_NEW_CONSOLE
 
 
-def _provider_available(model: str, profile: str = PROFILE_NAME) -> bool:
-    provider = _provider_key(model)
-    if not provider:
-        return False
-    cache_key = f"{profile}:{provider}"
-    cached = PROVIDER_CACHE.get(cache_key)
-    if cached is not None:
-        return cached
-    try:
-        result = subprocess.run(
-            ["opencode-multi", "run", profile, "models", provider],
-            capture_output=True,
-            text=True,
-            timeout=15,
-            check=False,
-            env=runtime_env(),
-        )
-    except (OSError, subprocess.SubprocessError):
-        PROVIDER_CACHE[cache_key] = False
-        return False
-    available = result.returncode == 0 and model in result.stdout.split()
-    PROVIDER_CACHE[cache_key] = available
-    return available
-
-
-def _resolve_model(model: str, profile: str = PROFILE_NAME) -> tuple[str, bool]:
-    for candidate in (model, *MODEL_FALLBACKS.get(model, ())):
-        if _provider_available(candidate, profile):
-            return candidate, candidate != model
-    return model, False
+def _slugify_profile_name(value: str) -> str:
+    slug = re.sub(r"[^a-zA-Z0-9_-]+", "-", value.strip().lower()).strip("-")
+    return slug or PROFILE_NAME
 
 
 def driver_profile(project_path: str) -> str | None:
@@ -414,11 +324,7 @@ def configured_project_profile(project_path: str) -> str | None:
 
 
 def project_profile(project_path: str) -> str:
-    """Return the opencode-multi profile used by the project.
-
-    The driver `$profileName` is authoritative. If absent, the optional
-    `profile` value from config.json is used, then the global default.
-    """
+    """Return the opencode-multi profile used by the project."""
 
     return driver_profile(project_path) or configured_project_profile(project_path) or PROFILE_NAME
 
@@ -430,7 +336,6 @@ def opencode_profile_exists(profile: str) -> bool:
         text=True,
         timeout=15,
         check=False,
-        env=runtime_env(),
     )
     return result.returncode == 0
 
@@ -445,110 +350,84 @@ def create_opencode_profile(profile: str, *, init: bool = True) -> subprocess.Co
         text=True,
         timeout=30,
         check=False,
-        env=runtime_env(),
     )
 
 
-def opencode_providers_list(profile: str) -> subprocess.CompletedProcess[str]:
+def opencode_providers_list(profile: str | None = None) -> subprocess.CompletedProcess[str]:
+    args = ["opencode-multi", "run", profile, "providers", "list"] if profile else [
+        "opencode",
+        "providers",
+        "list",
+    ]
     return subprocess.run(
-        ["opencode-multi", "run", profile, "providers", "list"],
+        args,
         capture_output=True,
         text=True,
         timeout=30,
         check=False,
-        env=runtime_env(),
     )
 
 
-def open_opencode_auth(project_path: str, profile: str) -> None:
+def open_opencode_login(project_path: str | None = None, profile: str | None = None) -> None:
+    if profile:
+        args = ["opencode-multi", "run", profile, "providers", "login"]
+    else:
+        args = ["opencode", "providers", "login"]
     subprocess.Popen(
-        ["opencode-multi", "run", profile, "providers", "login"],
-        cwd=str(project_path),
+        args,
+        cwd=str(project_path or APP_DIR),
         creationflags=_windows_console_flags(),
-        env=runtime_env(),
     )
 
 
-def setup_opencode_auth(project_path: str, profile: str) -> tuple[bool, str]:
+def setup_project_auth(project_path: str, profile: str) -> tuple[bool, str]:
     if not opencode_profile_exists(profile):
         result = create_opencode_profile(profile, init=True)
         if result.returncode != 0:
             output = (result.stderr or result.stdout or "opencode-multi create failed").strip()
             return False, output
-    open_opencode_auth(project_path, profile)
+    open_opencode_login(project_path, profile)
     return True, profile
 
 
-def _model_matches(model: str, expected: str) -> bool:
-    return bool(model) and model == expected
-
-
-def detect_provider(project_path: str) -> str:
-    """Return the effective provider mode from configured agent models."""
-
+def current_project_model(project_path: str) -> str:
     opencode_dir = Path(project_path) / ".opencode"
-    primary_agent = PRIMARY_AGENTS[0] if PRIMARY_AGENTS else "lead"
-    secondary_agent = SECONDARY_AGENTS[0] if SECONDARY_AGENTS else "coder"
-    primary_model = _agent_model(opencode_dir, primary_agent)
-
-    if _model_matches(primary_model, PRIMARY_MODEL):
-        secondary_model = _agent_model(opencode_dir, secondary_agent)
-        if _model_matches(secondary_model, PRIMARY_MODEL):
-            return "primary_only"
-        if _model_matches(secondary_model, SECONDARY_MODEL):
-            return "mixed"
-        if _model_matches(secondary_model, ALTERNATE_MODEL):
-            return "primary_alternate"
-        return "mixed"
-    if _model_matches(primary_model, SECONDARY_MODEL):
-        return "secondary"
-    if _model_matches(primary_model, ALTERNATE_MODEL):
-        return "alternate"
-    return "unknown"
+    models = [_agent_model(opencode_dir, agent) for agent in ALL_AGENTS]
+    models = [model for model in models if model]
+    if not models:
+        return "unknown"
+    unique = set(models)
+    return models[0] if len(unique) == 1 else "mixed"
 
 
-def requested_models_for_mode(mode: str) -> dict[str, str]:
-    if mode == "secondary":
-        return {agent: SECONDARY_MODEL for agent in ALL_AGENTS}
-    if mode == "alternate":
-        return {agent: ALTERNATE_MODEL for agent in ALL_AGENTS}
-    if mode == "primary_only":
-        return {agent: PRIMARY_MODEL for agent in ALL_AGENTS}
-    return {
-        agent: (PRIMARY_MODEL if agent in PRIMARY_AGENTS else SECONDARY_MODEL)
-        for agent in ALL_AGENTS
-    }
+def apply_model(project_path: str, model: str) -> dict[str, str]:
+    """Rewrite all configured agents to one selected model."""
 
-
-def apply_provider(project_path: str, mode: str) -> dict[str, str]:
-    """Rewrite configured agent models and apply authenticated fallbacks."""
+    selected = model.strip()
+    if not selected:
+        raise ValueError("Choose a model first.")
 
     opencode_dir = Path(project_path) / ".opencode"
     config_file = opencode_dir / "opencode.json"
     if not config_file.exists():
         raise FileNotFoundError(f".opencode/opencode.json not found in {project_path}")
 
-    requested_models = requested_models_for_mode(mode)
-    profile = project_profile(project_path)
-    resolved_models = {
-        agent: _resolve_model(model, profile)[0]
-        for agent, model in requested_models.items()
-    }
-
     data = json.loads(config_file.read_text(encoding="utf-8"))
+    applied = {agent: selected for agent in ALL_AGENTS}
+
     for name, agent_cfg in data.get("agent", {}).items():
-        if name in resolved_models and isinstance(agent_cfg, dict) and "model" in agent_cfg:
-            agent_cfg["model"] = resolved_models[name]
+        if name in applied and isinstance(agent_cfg, dict) and "model" in agent_cfg:
+            agent_cfg["model"] = selected
     config_file.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
 
-    for name, model in resolved_models.items():
+    for name in ALL_AGENTS:
         md = opencode_dir / "agents" / f"{name}.md"
         if md.exists():
             text = md.read_text(encoding="utf-8")
-            new_text = re.sub(r"(?m)^model:.*$", f"model: {model}", text, count=1)
+            new_text = re.sub(r"(?m)^model:.*$", f"model: {selected}", text, count=1)
             if new_text != text:
                 md.write_text(new_text, encoding="utf-8")
-    return resolved_models
+    return applied
 
 
 def launch_loop(project_path: str, *, resume: bool = False) -> None:
@@ -557,17 +436,13 @@ def launch_loop(project_path: str, *, resume: bool = False) -> None:
     ps1 = Path(project_path) / "auto-sentinel.ps1"
     if not ps1.exists():
         raise FileNotFoundError(f"auto-sentinel.ps1 not found in {project_path}")
-    if not hasattr(subprocess, "CREATE_NEW_CONSOLE"):
-        raise OSError("Launching loops is currently Windows-only because it uses PowerShell consoles.")
-
     args = ["powershell", "-NoExit", "-ExecutionPolicy", "Bypass", "-File", str(ps1)]
     if resume:
         args.append("-Resume")
     subprocess.Popen(
         args,
         cwd=str(project_path),
-        creationflags=subprocess.CREATE_NEW_CONSOLE,
-        env=runtime_env(),
+        creationflags=_windows_console_flags(),
     )
 
 
@@ -626,22 +501,21 @@ class LauncherApp:
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
         self.config = load_config()
-        self.provider_buttons: dict[str, tk.Button] = {}
         self.settings_window: tk.Toplevel | None = None
 
         root.title("LoopCode")
-        root.geometry("860x600")
-        root.minsize(680, 520)
+        root.geometry("920x620")
+        root.minsize(760, 540)
         root.configure(bg=BG)
 
         self._build_header()
-        self._build_provider_panel()
+        self._build_model_panel()
         self._build_projects_panel()
         self._build_actions()
         self._build_log()
 
         self.refresh_projects()
-        self.log("Ready. Select a project, choose a provider mode, then launch.")
+        self.log("Ready. Connect opencode, select a project, choose one model, then launch.")
 
     # -- UI construction ------------------------------------------------------
 
@@ -669,51 +543,65 @@ class LauncherApp:
             pady=6,
             command=self.open_settings,
         ).pack(side="right")
+        tk.Button(
+            header,
+            text="Connect opencode",
+            bg=PANEL,
+            fg=FG,
+            activebackground="#2a2f3a",
+            activeforeground="white",
+            relief="flat",
+            font=("Segoe UI", 9),
+            cursor="hand2",
+            padx=10,
+            pady=6,
+            command=self.connect_opencode,
+        ).pack(side="right", padx=8)
 
-    def _build_provider_panel(self) -> None:
+    def _build_model_panel(self) -> None:
         panel = tk.Frame(self.root, bg=PANEL)
         panel.pack(fill="x", padx=16, pady=6)
+        panel.grid_columnconfigure(0, weight=1)
+
         tk.Label(
             panel,
-            text="Provider mode for selected project:",
+            text="Single model for all agents:",
             bg=PANEL,
             fg=MUTED,
             font=("Segoe UI", 9),
-        ).grid(row=0, column=0, columnspan=4, sticky="w", padx=12, pady=(10, 2))
+        ).grid(row=0, column=0, columnspan=2, sticky="w", padx=12, pady=(10, 2))
 
-        self.provider_value = tk.Label(
+        self.current_model_value = tk.Label(
             panel,
             text="-",
             bg=PANEL,
             fg=FG,
             font=("Segoe UI", 11, "bold"),
         )
-        self.provider_value.grid(row=1, column=0, columnspan=4, sticky="w", padx=12)
+        self.current_model_value.grid(row=1, column=0, columnspan=2, sticky="w", padx=12)
 
-        buttons = (
-            ("secondary", f"{provider_label('secondary')} only", GREEN),
-            ("mixed", f"{provider_label('primary')} + {provider_label('secondary')}", BLUE),
-            ("alternate", f"{provider_label('alternate')} only", PURPLE),
-            ("primary_only", f"{provider_label('primary')} only", ORANGE),
+        self.model_var = tk.StringVar(value=DEFAULT_MODEL)
+        self.model_combo = ttk.Combobox(
+            panel,
+            textvariable=self.model_var,
+            values=MODEL_CATALOG,
+            width=54,
         )
-        self.provider_buttons = {}
-        for column, (mode, label, color) in enumerate(buttons):
-            button = tk.Button(
-                panel,
-                text=label,
-                bg=color,
-                fg="white",
-                activebackground=color,
-                activeforeground="white",
-                relief="flat",
-                font=("Segoe UI", 9, "bold"),
-                cursor="hand2",
-                padx=10,
-                pady=6,
-                command=lambda value=mode: self.switch_provider(value),
-            )
-            button.grid(row=2, column=column, sticky="w", padx=(12 if column == 0 else 4), pady=10)
-            self.provider_buttons[mode] = button
+        self.model_combo.grid(row=2, column=0, sticky="we", padx=12, pady=10)
+        tk.Button(
+            panel,
+            text="Apply model",
+            bg=CYAN,
+            fg="#06121a",
+            activebackground="#0891b2",
+            activeforeground="white",
+            relief="flat",
+            font=("Segoe UI", 9, "bold"),
+            cursor="hand2",
+            padx=12,
+            pady=7,
+            command=self.apply_selected_model,
+        ).grid(row=2, column=1, sticky="e", padx=(0, 12), pady=10)
 
     def _build_projects_panel(self) -> None:
         panel = tk.Frame(self.root, bg=BG)
@@ -781,76 +669,28 @@ class LauncherApp:
             highlightthickness=0,
         ).pack(side="left", padx=10)
 
-        tk.Button(
-            bar,
-            text="Remove",
-            bg=PANEL,
-            fg=FG,
-            activebackground=RED,
-            activeforeground="white",
-            relief="flat",
-            font=("Segoe UI", 9),
-            cursor="hand2",
-            padx=12,
-            pady=8,
-            command=self.remove_project,
-        ).pack(side="right")
-        tk.Button(
-            bar,
-            text="Add project",
-            bg=PANEL,
-            fg=FG,
-            activebackground="#2a2f3a",
-            activeforeground="white",
-            relief="flat",
-            font=("Segoe UI", 9),
-            cursor="hand2",
-            padx=12,
-            pady=8,
-            command=self.add_project,
-        ).pack(side="right", padx=8)
-        tk.Button(
-            bar,
-            text="OBJ prompt",
-            bg=PANEL,
-            fg=FG,
-            activebackground="#2a2f3a",
-            activeforeground="white",
-            relief="flat",
-            font=("Segoe UI", 9),
-            cursor="hand2",
-            padx=12,
-            pady=8,
-            command=self.open_obj_prompt,
-        ).pack(side="right", padx=8)
-        tk.Button(
-            bar,
-            text="Auth status",
-            bg=PANEL,
-            fg=FG,
-            activebackground="#2a2f3a",
-            activeforeground="white",
-            relief="flat",
-            font=("Segoe UI", 9),
-            cursor="hand2",
-            padx=12,
-            pady=8,
-            command=self.show_auth_status,
-        ).pack(side="right", padx=8)
-        tk.Button(
-            bar,
-            text="Setup opencode auth",
-            bg=PANEL,
-            fg=FG,
-            activebackground="#2a2f3a",
-            activeforeground="white",
-            relief="flat",
-            font=("Segoe UI", 9),
-            cursor="hand2",
-            padx=12,
-            pady=8,
-            command=self.setup_auth,
-        ).pack(side="right", padx=8)
+        actions = (
+            ("Remove", self.remove_project),
+            ("Add project", self.add_project),
+            ("OBJ prompt", self.open_obj_prompt),
+            ("Auth status", self.show_auth_status),
+            ("Project auth", self.setup_project_auth),
+        )
+        for text, command in actions:
+            tk.Button(
+                bar,
+                text=text,
+                bg=PANEL,
+                fg=FG,
+                activebackground=RED if text == "Remove" else "#2a2f3a",
+                activeforeground="white",
+                relief="flat",
+                font=("Segoe UI", 9),
+                cursor="hand2",
+                padx=12,
+                pady=8,
+                command=command,
+            ).pack(side="right", padx=4)
 
     def _build_log(self) -> None:
         frame = tk.Frame(self.root, bg=BG)
@@ -914,18 +754,6 @@ class LauncherApp:
         self.root.clipboard_append(content)
         self.log("Copied to clipboard.")
 
-    def refresh_provider_buttons(self) -> None:
-        labels = {
-            "secondary": f"{provider_label('secondary')} only",
-            "mixed": f"{provider_label('primary')} + {provider_label('secondary')}",
-            "alternate": f"{provider_label('alternate')} only",
-            "primary_only": f"{provider_label('primary')} only",
-        }
-        for mode, text in labels.items():
-            button = self.provider_buttons.get(mode)
-            if button is not None:
-                button.configure(text=text)
-
     def open_settings(self) -> None:
         if self.settings_window is not None and self.settings_window.winfo_exists():
             self.settings_window.lift()
@@ -934,20 +762,14 @@ class LauncherApp:
         window = tk.Toplevel(self.root)
         self.settings_window = window
         window.title("LoopCode Settings")
-        window.geometry("980x560")
-        window.minsize(760, 420)
+        window.geometry("820x520")
+        window.minsize(640, 420)
         window.configure(bg=BG)
 
         body = tk.Frame(window, bg=BG)
         body.pack(fill="both", expand=True, padx=14, pady=14)
 
-        tk.Label(
-            body,
-            text="opencode profile",
-            bg=BG,
-            fg=MUTED,
-            font=("Segoe UI", 9),
-        ).grid(row=0, column=0, sticky="w", pady=(0, 4))
+        tk.Label(body, text="Default opencode profile", bg=BG, fg=MUTED).pack(anchor="w")
         profile_var = tk.StringVar(value=PROFILE_NAME)
         tk.Entry(
             body,
@@ -957,131 +779,56 @@ class LauncherApp:
             insertbackground=FG,
             relief="flat",
             font=("Segoe UI", 10),
-            width=24,
-        ).grid(row=1, column=0, sticky="we", pady=(0, 14))
+        ).pack(fill="x", pady=(4, 12))
 
-        headers = ("Slot", "Label", "Active model", "Models", "API key env", "API key fallback")
-        for column, header in enumerate(headers):
-            tk.Label(
-                body,
-                text=header,
-                bg=BG,
-                fg=MUTED,
-                font=("Segoe UI", 9),
-            ).grid(row=2, column=column, sticky="w", padx=(0, 8), pady=(0, 4))
+        tk.Label(body, text="Default model", bg=BG, fg=MUTED).pack(anchor="w")
+        default_model_var = tk.StringVar(value=DEFAULT_MODEL)
+        ttk.Combobox(
+            body,
+            textvariable=default_model_var,
+            values=MODEL_CATALOG,
+        ).pack(fill="x", pady=(4, 12))
 
-        secrets = load_secret_config()
-        rows: dict[str, dict[str, tk.StringVar | tk.Entry | ttk.Combobox]] = {}
-        for offset, key in enumerate(PROVIDER_KEYS, start=3):
-            provider = PROVIDERS[key]
-            label_var = tk.StringVar(value=provider["label"])
-            model_var = tk.StringVar(value=provider["model"])
-            models_var = tk.StringVar(value=", ".join(provider["models"]))
-            env_var = tk.StringVar(value=provider["api_key_env"])
-
-            tk.Label(
-                body,
-                text=key,
-                bg=BG,
-                fg=FG,
-                font=("Segoe UI", 10, "bold"),
-            ).grid(row=offset, column=0, sticky="w", padx=(0, 8), pady=4)
-            tk.Entry(
-                body,
-                textvariable=label_var,
-                bg=PANEL,
-                fg=FG,
-                insertbackground=FG,
-                relief="flat",
-                width=18,
-            ).grid(row=offset, column=1, sticky="we", padx=(0, 8), pady=4)
-            combo = ttk.Combobox(
-                body,
-                textvariable=model_var,
-                values=provider["models"],
-                width=28,
-            )
-            combo.grid(row=offset, column=2, sticky="we", padx=(0, 8), pady=4)
-            tk.Entry(
-                body,
-                textvariable=models_var,
-                bg=PANEL,
-                fg=FG,
-                insertbackground=FG,
-                relief="flat",
-                width=36,
-            ).grid(row=offset, column=3, sticky="we", padx=(0, 8), pady=4)
-            tk.Entry(
-                body,
-                textvariable=env_var,
-                bg=PANEL,
-                fg=FG,
-                insertbackground=FG,
-                relief="flat",
-                width=18,
-            ).grid(row=offset, column=4, sticky="we", padx=(0, 8), pady=4)
-            key_entry = tk.Entry(
-                body,
-                bg=PANEL,
-                fg=FG,
-                insertbackground=FG,
-                relief="flat",
-                show="*",
-                width=22,
-            )
-            key_entry.grid(row=offset, column=5, sticky="we", padx=(0, 8), pady=4)
-            if provider["api_key_env"] in secrets["api_keys"]:
-                key_entry.insert(0, "")
-                key_entry.configure(fg=CYAN)
-
-            rows[key] = {
-                "label": label_var,
-                "model": model_var,
-                "models": models_var,
-                "env": env_var,
-                "key_entry": key_entry,
-            }
-
-        for column in range(6):
-            body.grid_columnconfigure(column, weight=1 if column in (2, 3, 5) else 0)
+        tk.Label(
+            body,
+            text="Model catalog (one provider/model per line)",
+            bg=BG,
+            fg=MUTED,
+        ).pack(anchor="w")
+        models_text = tk.Text(
+            body,
+            bg=PANEL,
+            fg=FG,
+            insertbackground=FG,
+            relief="flat",
+            height=12,
+            font=("Consolas", 9),
+        )
+        models_text.pack(fill="both", expand=True, pady=(4, 12))
+        models_text.insert("1.0", "\n".join(MODEL_CATALOG))
 
         bar = tk.Frame(window, bg=BG)
         bar.pack(fill="x", padx=14, pady=(0, 14))
 
         def save_settings() -> None:
-            new_config = copy.deepcopy(PROVIDER_CONFIG)
-            new_config["profile_name"] = profile_var.get()
-            secret_config = load_secret_config()
-
-            for key, row in rows.items():
-                old_env = PROVIDERS[key]["api_key_env"]
-                label = str(row["label"].get())
-                active_model = str(row["model"].get())
-                model_values = [
-                    item.strip()
-                    for item in str(row["models"].get()).split(",")
-                    if item.strip()
-                ]
-                models = _dedupe_strings([active_model, *model_values])
-                env_name = str(row["env"].get()).strip()
-                api_key = str(row["key_entry"].get())
-
-                new_config["providers"][key] = {
-                    "label": label,
-                    "model": active_model,
-                    "models": models,
-                    "api_key_env": env_name,
-                }
-
-                if old_env != env_name and old_env in secret_config["api_keys"]:
-                    secret_config["api_keys"][env_name] = secret_config["api_keys"].pop(old_env)
-                if api_key:
-                    secret_config["api_keys"][env_name] = api_key
-
+            models = [
+                line.strip()
+                for line in models_text.get("1.0", "end").splitlines()
+                if line.strip()
+            ]
+            default_model = default_model_var.get().strip()
+            if default_model:
+                models = _dedupe_strings([default_model, *models])
+            new_config = {
+                "profile_name": profile_var.get().strip() or PROFILE_NAME,
+                "model": default_model or (models[0] if models else DEFAULT_MODEL),
+                "models": models or list(MODEL_CATALOG),
+                "agents": {"all": list(ALL_AGENTS)},
+            }
             save_provider_config(new_config)
-            save_secret_config(secret_config)
             reload_runtime_config()
-            self.refresh_provider_buttons()
+            self.model_combo.configure(values=MODEL_CATALOG)
+            self.model_var.set(DEFAULT_MODEL)
             self.on_select()
             self.log("Settings saved.")
             window.destroy()
@@ -1151,31 +898,42 @@ class LauncherApp:
             self.listbox.selection_set(0)
             self.on_select()
         else:
-            self.provider_value.config(text="-")
+            self.current_model_value.config(text="-")
 
     def on_select(self) -> None:
         project = self.selected_project()
         if project is None:
-            self.provider_value.config(text="-")
+            self.current_model_value.config(text="-")
             return
-        provider = detect_provider(project["path"])
-        self.provider_value.config(text=mode_label(provider))
+        model = current_project_model(project["path"])
+        self.current_model_value.config(text=model)
+        if model not in ("unknown", "mixed"):
+            self.model_var.set(model)
 
-    def setup_auth(self) -> None:
+    def connect_opencode(self) -> None:
+        try:
+            open_opencode_login()
+        except (OSError, subprocess.SubprocessError) as exc:
+            messagebox.showerror("LoopCode", f"opencode login failed: {exc}")
+            self.log(f"opencode login failed: {exc}")
+            return
+        self.log("Opened opencode provider login.")
+
+    def setup_project_auth(self) -> None:
         project = self.selected_project()
         profile = self.selected_profile()
         if project is None or profile is None:
             messagebox.showinfo("LoopCode", "Select a project first.")
             return
         try:
-            ok, message = setup_opencode_auth(project["path"], profile)
+            ok, message = setup_project_auth(project["path"], profile)
         except (OSError, subprocess.SubprocessError) as exc:
             ok, message = False, str(exc)
         if not ok:
-            messagebox.showerror("LoopCode", f"opencode auth setup failed: {message}")
-            self.log(f"opencode auth setup failed: {message}")
+            messagebox.showerror("LoopCode", f"Project auth failed: {message}")
+            self.log(f"Project auth failed: {message}")
             return
-        self.log(f"Opened opencode auth for profile '{message}'.")
+        self.log(f"Opened opencode auth for project profile '{message}'.")
 
     def show_auth_status(self) -> None:
         profile = self.selected_profile()
@@ -1183,45 +941,38 @@ class LauncherApp:
             messagebox.showinfo("LoopCode", "Select a project first.")
             return
         try:
-            result = opencode_providers_list(profile)
+            global_result = opencode_providers_list()
+            project_result = opencode_providers_list(profile)
         except (OSError, subprocess.SubprocessError) as exc:
             messagebox.showerror("LoopCode", f"Auth status failed: {exc}")
             self.log(f"Auth status failed: {exc}")
             return
-        output = (result.stdout or result.stderr or "").strip()
-        if not output:
-            output = f"No provider output for profile '{profile}'."
-        self.open_text_window(f"opencode providers - {profile}", output)
+        output = [
+            "Global opencode credentials:",
+            (global_result.stdout or global_result.stderr or "").strip() or "(no output)",
+            "",
+            f"Project profile '{profile}' credentials:",
+            (project_result.stdout or project_result.stderr or "").strip() or "(no output)",
+        ]
+        self.open_text_window("opencode auth status", "\n".join(output))
 
     def open_obj_prompt(self) -> None:
         self.open_text_window("OBJ prompt", build_obj_prompt(self.selected_project()))
 
-    def switch_provider(self, mode: str) -> None:
+    def apply_selected_model(self) -> None:
         project = self.selected_project()
         if project is None:
             messagebox.showinfo("LoopCode", "Select a project first.")
             return
+        model = self.model_var.get().strip()
         try:
-            resolved_models = apply_provider(project["path"], mode)
+            applied = apply_model(project["path"], model)
         except (OSError, ValueError) as exc:
-            messagebox.showerror("LoopCode", f"Provider switch failed: {exc}")
-            self.log(f"Provider switch failed: {exc}")
+            messagebox.showerror("LoopCode", f"Model switch failed: {exc}")
+            self.log(f"Model switch failed: {exc}")
             return
         self.on_select()
-        self.log(f"{project['name']} -> {mode_label(mode)}")
-
-        fallback_notes = []
-        for agent, requested_model in requested_models_for_mode(mode).items():
-            applied_model = resolved_models.get(agent, requested_model)
-            if applied_model != requested_model:
-                fallback_notes.append(f"{agent}: {requested_model} -> {applied_model}")
-        if fallback_notes:
-            profile = project_profile(project["path"])
-            self.log(
-                f"Requested provider is not authenticated in profile '{profile}'. "
-                "Fallback: " + " | ".join(fallback_notes)
-            )
-            self.log(f"Authenticate with: opencode-multi run {profile} models")
+        self.log(f"{project['name']} -> {model} ({len(applied)} agents)")
 
     def do_launch(self) -> None:
         project = self.selected_project()
@@ -1234,9 +985,9 @@ class LauncherApp:
             messagebox.showerror("LoopCode", f"Launch failed: {exc}")
             self.log(f"Launch failed: {exc}")
             return
-        provider = mode_label(detect_provider(project["path"]))
+        model = current_project_model(project["path"])
         mode = " (resume)" if self.resume_var.get() else ""
-        self.log(f"Loop launched: {project['name']}{mode} - {provider}")
+        self.log(f"Loop launched: {project['name']}{mode} - {model}")
 
     def add_project(self) -> None:
         path = filedialog.askdirectory(title="Choose project folder")

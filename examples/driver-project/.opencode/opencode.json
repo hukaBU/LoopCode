@@ -13,16 +13,16 @@
       "model": "openai/gpt-5.5"
     },
     "coder": {
-      "model": "opencode/deepseek-v4-flash-free"
+      "model": "openai/gpt-5.5"
     },
     "researcher": {
-      "model": "opencode/deepseek-v4-flash-free"
+      "model": "openai/gpt-5.5"
     },
     "tester": {
-      "model": "opencode/deepseek-v4-flash-free"
+      "model": "openai/gpt-5.5"
     },
     "docs": {
-      "model": "opencode/deepseek-v4-flash-free"
+      "model": "openai/gpt-5.5"
     }
   }
 }

@@ -47,7 +47,7 @@ If the driver does not define `$profileName`, LoopCode uses the optional
 
 ## opencode Files
 
-The provider switch updates existing `model` fields in:
+The model switch updates existing `model` fields in:
 
 - `.opencode/opencode.json`
 - `.opencode/agents/*.md` frontmatter lines like `model: provider/model-id`
@@ -57,24 +57,21 @@ definitions or create prompts.
 
 ## opencode-multi
 
-`opencode-multi` and `opencode` must be available on `PATH`. The launcher checks model
-availability with:
+`opencode-multi` and `opencode` must be available on `PATH`. LoopCode does not
+store API keys. It opens global opencode login with:
 
 ```powershell
-opencode-multi run <profile> models <provider>
+opencode providers login
 ```
 
-If a requested model is unavailable, configured fallbacks from `providers.json`
-are tried.
-
-For auth, LoopCode opens:
+For project profile auth, LoopCode opens:
 
 ```powershell
 opencode-multi run <profile> providers login
 ```
 
-That command delegates credentials to opencode. Local API keys in `secrets.json`
-are only an optional fallback.
+That command delegates credentials to opencode under the selected
+`opencode-multi` profile.
 
 ## .ai State
 

@@ -1,5 +1,5 @@
 ---
-model: opencode/deepseek-v4-flash-free
+model: openai/gpt-5.5
 ---
 
 # Researcher

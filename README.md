@@ -8,14 +8,13 @@ The app is intentionally local-first:
 
 - runtime dependencies: Python standard library + Tkinter
 - private project list: `config.json` (git-ignored)
-- private provider overrides: `providers.json` (git-ignored)
-- optional API-key fallback: `secrets.json` (git-ignored)
+- private model catalog overrides: `providers.json` (git-ignored)
 - public templates: `config.example.json` and `providers.example.json`
 
 ## Status
 
 This is a thin launcher for an existing agent-loop setup. It does not install
-`opencode-multi`, create provider accounts, or generate full agent prompts.
+`opencode-multi` or generate full agent prompts.
 
 Loop launching is currently Windows-only because it uses PowerShell and
 `subprocess.CREATE_NEW_CONSOLE`. The config editing helpers are plain Python.
@@ -40,7 +39,7 @@ Loop launching is currently Windows-only because it uses PowerShell and
 
 2. Edit `config.json` and point a project at your driver folder.
 
-3. Edit `providers.json` for your provider labels, model ids, agent groups, and fallbacks.
+3. Edit `providers.json` if you want to change the default model catalog.
 
 4. Launch the app:
 
@@ -50,8 +49,10 @@ Loop launching is currently Windows-only because it uses PowerShell and
 
    Or double-click `LoopCode.bat`.
 
-5. Select a project and click `Setup opencode auth`. LoopCode creates the
-   `opencode-multi` profile when needed, then opens `opencode providers login`
+5. Click `Connect opencode` once to sign in with opencode.
+
+6. Select a project and click `Project auth`. LoopCode creates the
+   `opencode-multi` profile when needed, then opens opencode provider login
    through that profile.
 
 ## Project Config
@@ -63,7 +64,8 @@ Loop launching is currently Windows-only because it uses PowerShell and
   "projects": [
     {
       "name": "Example driver project",
-      "path": "C:\\path\\to\\LoopCode\\examples\\driver-project"
+      "path": "C:\\path\\to\\LoopCode\\examples\\driver-project",
+      "profile": "agentic"
     }
   ]
 }
@@ -75,34 +77,34 @@ The committed default in `launcher.py` is deliberately empty:
 {"projects": []}
 ```
 
-## Provider Config
+## Model Config
 
-Provider ids and agent names live outside the launcher code. Start with
+Model ids and agent names live outside the launcher code. Start with
 `providers.example.json`, then keep your real `providers.json` private.
 
-The default provider modes are:
-
-- secondary only
-- primary + secondary
-- alternate only
-- primary only
-
-Each mode rewrites existing `model` fields in `.opencode/opencode.json` and
-`model:` frontmatter lines in `.opencode/agents/*.md`.
-
-Use `Settings` to choose the active model from each provider slot's dropdown.
-The model lists are stored in private `providers.json`.
+The top selector applies one model to every configured agent. No built-in
+combinations are used; choose one `provider/model` id, then click `Apply model`.
+The catalog includes popular Models.dev/opencode provider ids for OpenAI,
+Anthropic, DeepSeek, Qwen/Alibaba, Z.ai, Gemini/Google, Grok/xAI, MiniMax,
+Xiaomi MiMo, Moonshot/Kimi, and Mistral. You can edit the list in `Settings`.
 
 ## opencode Auth
 
-LoopCode expects credentials to live in opencode whenever possible. For each
-project, the app uses this profile order:
+LoopCode expects credentials to live in opencode. It does not store API keys.
+
+`Connect opencode` opens:
+
+```powershell
+opencode providers login
+```
+
+For each project, the app uses this profile order:
 
 - `$profileName = "..."` in the project's `auto-*.ps1`
 - optional `profile` in `config.json`
 - `profile_name` from `providers.json`
 
-`Setup opencode auth` creates the profile with `opencode-multi create <profile>
+`Project auth` creates the profile with `opencode-multi create <profile>
 --init` if it does not exist, then opens:
 
 ```powershell
@@ -114,9 +116,6 @@ opencode-multi run <profile> providers login
 ```powershell
 opencode-multi run <profile> providers list
 ```
-
-`secrets.json` is only a fallback for workflows that still need environment
-variables injected into the launched driver process.
 
 ## OBJ Prompt
 
