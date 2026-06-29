@@ -1,8 +1,9 @@
 # LoopCode
 
-LoopCode is a small Windows desktop app for managing local agent-loop projects.
-It stores a local project list, launches a project's PowerShell driver in a new console,
-and switches configured agent model ids across `.opencode` files.
+LoopCode is a small Windows desktop launcher for local `opencode-multi` agent-loop
+projects. It helps you register projects, connect opencode, choose one AI model
+for all agents, rewrite the project's `.opencode` model config, and launch the
+project's PowerShell loop driver.
 
 The app is intentionally local-first:
 
@@ -10,20 +11,56 @@ The app is intentionally local-first:
 - private project list: `config.json` (git-ignored)
 - private model catalog overrides: `providers.json` (git-ignored)
 - public templates: `config.example.json` and `providers.example.json`
+- credentials: handled by opencode, not by LoopCode
 
 ## Status
 
-This is a thin launcher for an existing agent-loop setup. It does not install
-`opencode-multi` or generate full agent prompts.
+LoopCode is a thin launcher for an existing agent-loop setup. It does not install
+`opencode`, install `opencode-multi`, generate complete agent prompts, or run a
+hosted backend.
 
-Loop launching is currently Windows-only because it uses PowerShell and
-`subprocess.CREATE_NEW_CONSOLE`. The config editing helpers are plain Python.
+Loop launching is currently Windows-only because it uses PowerShell and opens
+each loop in its own console.
+
+## How It Works
+
+LoopCode sits above three things you already own:
+
+1. a project folder with a loop driver, usually `auto-sentinel.ps1`
+2. an `.opencode/` folder with `opencode.json` and `agents/*.md`
+3. opencode credentials and profiles managed by `opencode` / `opencode-multi`
+
+The normal flow is:
+
+1. Add a project folder to LoopCode.
+2. Connect your global opencode account with `Connect opencode`.
+3. Create or open the project's isolated `opencode-multi` auth with `Project auth`.
+4. Pick one model in the dropdown, such as `openai/gpt-5.5` or `anthropic/claude-sonnet-4-5`.
+5. Click `Apply model`.
+6. Click `Launch loop`.
+
+When you click `Apply model`, LoopCode rewrites existing model fields in:
+
+- `.opencode/opencode.json`
+- `.opencode/agents/*.md` frontmatter lines like `model: provider/model-id`
+
+It applies the selected model to every configured agent. It does not create new
+agents, write prompts, or store provider API keys.
+
+When you click `Launch loop`, LoopCode opens a new PowerShell console and runs:
+
+```powershell
+powershell -NoExit -ExecutionPolicy Bypass -File auto-sentinel.ps1
+```
+
+If `Resume (-Resume)` is checked, it appends `-Resume`.
 
 ## Requirements
 
 - Windows 10/11
 - Python 3.10 or newer with Tkinter
 - PowerShell
+- `opencode` on `PATH`
 - `opencode-multi` on `PATH`
 - At least one project that follows the driver contract in
   [docs/driver-contract.md](docs/driver-contract.md)
@@ -39,9 +76,7 @@ Loop launching is currently Windows-only because it uses PowerShell and
 
 2. Edit `config.json` and point a project at your driver folder.
 
-3. Edit `providers.json` if you want to change the default model catalog.
-
-4. Launch the app:
+3. Launch the app:
 
    ```powershell
    py -3 launcher.py
@@ -49,11 +84,40 @@ Loop launching is currently Windows-only because it uses PowerShell and
 
    Or double-click `LoopCode.bat`.
 
-5. Click `Connect opencode` once to sign in with opencode.
+4. Click `Connect opencode` to open:
 
-6. Select a project and click `Project auth`. LoopCode creates the
-   `opencode-multi` profile when needed, then opens opencode provider login
-   through that profile.
+   ```powershell
+   opencode providers login
+   ```
+
+5. Select a project and click `Project auth`. LoopCode creates the profile if
+   needed:
+
+   ```powershell
+   opencode-multi create <profile> --init
+   ```
+
+   Then it opens:
+
+   ```powershell
+   opencode-multi run <profile> providers login
+   ```
+
+6. Choose a model from the dropdown and click `Apply model`.
+
+7. Click `Launch loop`.
+
+## Buttons
+
+- `Connect opencode`: opens global opencode provider login.
+- `Settings`: edits the default profile and model catalog stored in `providers.json`.
+- `Apply model`: writes the selected model into the selected project's `.opencode` files.
+- `Project auth`: creates/opens auth for the selected project's `opencode-multi` profile.
+- `Auth status`: shows global opencode auth and project profile auth status.
+- `OBJ prompt`: shows a reusable prompt for turning a project brief into OBJ tasks.
+- `Add project`: registers a local project folder in `config.json`.
+- `Remove`: removes the project from LoopCode's local list only.
+- `Launch loop`: starts the selected project's PowerShell driver.
 
 ## Project Config
 
@@ -77,50 +141,66 @@ The committed default in `launcher.py` is deliberately empty:
 {"projects": []}
 ```
 
+LoopCode chooses the project auth profile in this order:
+
+1. `$profileName = "..."` inside the project's `auto-*.ps1`
+2. `profile` in `config.json`
+3. `profile_name` in `providers.json`
+
 ## Model Config
 
 Model ids and agent names live outside the launcher code. Start with
 `providers.example.json`, then keep your real `providers.json` private.
 
-The top selector applies one model to every configured agent. No built-in
-combinations are used; choose one `provider/model` id, then click `Apply model`.
-The catalog includes popular Models.dev/opencode provider ids for OpenAI,
+The top selector applies one model to every configured agent. No built-in model
+combinations are used.
+
+The default catalog includes popular Models.dev/opencode ids for OpenAI,
 Anthropic, DeepSeek, Qwen/Alibaba, Z.ai, Gemini/Google, Grok/xAI, MiniMax,
 Xiaomi MiMo, Moonshot/Kimi, and Mistral. You can edit the list in `Settings`.
 
+Minimal `providers.json`:
+
+```json
+{
+  "profile_name": "agentic",
+  "model": "openai/gpt-5.5",
+  "models": ["openai/gpt-5.5", "anthropic/claude-sonnet-4-5"],
+  "agents": {
+    "all": ["lead", "security", "reviewer", "debugger", "coder", "researcher", "tester", "docs"]
+  }
+}
+```
+
 ## opencode Auth
 
-LoopCode expects credentials to live in opencode. It does not store API keys.
+LoopCode expects credentials to live in opencode. It never asks for API keys and
+does not write `auth.json` itself.
 
-`Connect opencode` opens:
+Global auth:
 
 ```powershell
 opencode providers login
 ```
 
-For each project, the app uses this profile order:
-
-- `$profileName = "..."` in the project's `auto-*.ps1`
-- optional `profile` in `config.json`
-- `profile_name` from `providers.json`
-
-`Project auth` creates the profile with `opencode-multi create <profile>
---init` if it does not exist, then opens:
+Project profile auth:
 
 ```powershell
 opencode-multi run <profile> providers login
 ```
 
-`Auth status` runs:
+Auth status:
 
 ```powershell
+opencode providers list
 opencode-multi run <profile> providers list
 ```
 
 ## OBJ Prompt
 
 Click `OBJ prompt` to copy a reusable prompt that asks an AI to translate a
-rough project brief into small, testable OBJ tasks for the loop.
+rough project brief into small, testable OBJ tasks for the loop. The prompt is
+also available in [docs/obj-prompt.md](docs/obj-prompt.md).
 
 ## Example Driver
 
@@ -134,6 +214,15 @@ without depending on private infrastructure. It includes:
 
 The example driver only prints its inputs and runs `self_improve.py`; replace it
 with your real loop driver in production.
+
+## Safety Notes
+
+- Do not make a private launcher repo public if it has private paths or commits
+  in history.
+- Do not commit `config.json` or `providers.json`.
+- LoopCode edits `.opencode` files in the selected project. If that project is a
+  git repo, model switches may appear as normal git changes.
+- LoopCode does not store API keys.
 
 ## Tests
 
@@ -158,15 +247,4 @@ PyInstaller is optional and not needed at runtime:
 ```powershell
 py -3 -m pip install -e .[build]
 py -3 -m PyInstaller --onefile --windowed --name "LoopCode" launcher.py
-```
-
-## Publishing Safely
-
-If this project was extracted from a private launcher, do not make the private
-repository public. Create a fresh repository from these sanitized files instead:
-
-```powershell
-git init
-git add .
-git commit -m "Initial public release"
 ```
